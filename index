@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Courtyard Escape — a tiny GitHub Pages game</title>
+  <style>
+    :root { --bg:#0f1220; --panel:#171a2a; --ink:#e9ecff; --muted:#9aa3c7; --accent:#8ad1ff; --good:#72e6b4; --bad:#ff8a9a; }
+    html,body { height:100%; }
+    body { margin:0; font:16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif; color:var(--ink); background:radial-gradient(1200px 600px at 70% -30%, #1a2040, #0b0e1a) fixed; display:flex; align-items:center; justify-content:center; }
+    .game { width:clamp(320px, 90vw, 820px); background:linear-gradient(180deg, #13172b, #0f1220); border:1px solid #2a305a; border-radius:20px; box-shadow:0 10px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05); overflow:hidden; }
+    header { padding:16px 18px; display:flex; align-items:center; gap:12px; background:linear-gradient(180deg, #181d35, #12162a); border-bottom:1px solid #2a305a; }
+    header h1 { font-size:18px; margin:0; letter-spacing:.3px; }
+    header .meta { margin-left:auto; font-size:12px; color:var(--muted); }
+    main { padding:18px; display:grid; gap:16px; }
+    .scene { background:var(--panel); border:1px solid #272d56; border-radius:16px; padding:16px; min-height:140px; }
+    .scene h2 { margin:0 0 6px 0; font-size:16px; color:var(--accent); }
+    .scene p { margin:.4em 0; }
+    .choices { display:grid; gap:8px; }
+    .choices button { text-align:left; border:1px solid #2a315f; background:#10142b; color:var(--ink); padding:10px 12px; border-radius:12px; cursor:pointer; transition:transform .06s ease, border-color .2s ease; }
+    .choices button:hover { transform:translateY(-1px); border-color:#3a498f; }
+    .choices button[disabled] { opacity:.55; cursor:not-allowed; }
+    .hud { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .tag { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #2a305a; background:#12162a; color:var(--muted); }
+    .inv { display:flex; gap:6px; flex-wrap:wrap; }
+    .inv .item { font-size:12px; padding:4px 8px; border-radius:10px; border:1px solid #2a305a; background:#0f1326; }
+    .log { height:140px; background:#0d1021; border:1px solid #272d56; border-radius:14px; padding:12px; overflow:auto; font-size:14px; color:#c6ccff; }
+    .log .good { color:var(--good); }
+    .log .bad { color:var(--bad); }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; }
+    .toolbar button { border:1px solid #2a315f; background:#10142b; color:var(--ink); padding:8px 10px; border-radius:10px; cursor:pointer; }
+    footer { padding:12px 18px; border-top:1px solid #2a305a; display:flex; gap:8px; flex-wrap:wrap; align-items:center; color:var(--muted); font-size:12px; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="game" role="application" aria-label="Courtyard Escape game">
+    <header>
+      <h1>Courtyard Escape</h1>
+      <div class="meta" id="progress">0% complete</div>
+    </header>
+    <main>
+      <section class="hud" aria-label="Status">
+        <span class="tag" id="klevel">Mode: Casual</span>
+        <div class="tag">Inventory:</div>
+        <div class="inv" id="inventory"></div>
+        <div class="tag" id="saveState"></div>
+      </section>
+      <section class="scene" id="scene" aria-live="polite"></section>
+      <div class="choices" id="choices"></div>
+      <div class="toolbar">
+        <button id="saveBtn" title="Save to this browser">Save</button>
+        <button id="loadBtn" title="Load from this browser">Load</button>
+        <button id="resetBtn" title="Restart the game">Restart</button>
+        <button id="proModeBtn" title="Harder puzzles">Toggle Pro Mode</button>
+      </div>
+      <div class="log" id="log" aria-label="Event log"></div>
+    </main>
+    <footer>
+      <span>Single‑file game. Works on GitHub Pages.</span>
+      <span>•</span>
+      <a href="#" id="how">How to edit scenes</a>
+    </footer>
+  </div>
+
+  <script>
+    // Tiny engine: scene graph + flags + inventory. No external libs.
+    const state = {
+      here: 'start',
+      flags: {},
+      inventory: [],
+      pro: false,
+      turns: 0
+    };
+
+    const SCENES = {
+      start: {
+        title: 'A walled courtyard at dusk',
+        text: `You stand before a locked door. A bronze plaque glints in the fading light. A heavy flowerpot sits by the step. A bench rests under a crooked lamp.`,
+        choices: [
+          { text: 'Examine the door', go: 'door' },
+          { text: 'Read the plaque', go: 'plaque' },
+          { text: 'Inspect the flowerpot', go: 'pot' },
+          { text: 'Check the bench', go: 'bench' }
+        ]
+      },
+      door: {
+        title: 'The oak door',
+        text: () => state.flags.unlocked
+          ? 'The door is unlocked. Inside lies a quiet archive that smells of paper and dust.'
+          : 'Solid oak. The lock looks old but stubborn. You probably need a key.',
+        choices: () => state.flags.unlocked
+          ? [ { text: 'Enter', go: 'inside' }, { text: 'Back', go: 'start' } ]
+          : [ { text: 'Back', go: 'start' } ]
+      },
+      plaque: {
+        title: 'Bronze plaque',
+        text: () => {
+          const hint = state.pro ? 'Knowledge leverages small tools into big wins.' : '“Knowledge is the lever.”';
+          return `The plaque reads: ${hint}`;
+        },
+        choices: [
+          { text: 'Back', go: 'start' }
+        ]
+      },
+      pot: {
+        title: 'Stone flowerpot',
+        text: () => {
+          if (!state.flags.potMoved) return 'It is heavy and snug against the step. Something scrapes underneath when you nudge it.';
+          if (!has('rusty key')) return 'The pot is moved aside, revealing a narrow gap. You can just make out the glint of a key.';
+          return 'The pot is moved. The gap is empty now.';
+        },
+        choices: () => {
+          const c = [{ text: 'Back', go: 'start' }];
+          if (!state.flags.potMoved) c.unshift({ text: 'Try to slide the pot', act: () => tryMovePot() });
+          if (state.flags.potMoved && !has('rusty key')) {
+            c.unshift({ text: 'Reach for the key', act: () => tryReachKey() });
+            if (!state.flags.hasLever) c.unshift({ text: 'I need a lever...', go: 'bench' });
+          }
+          return c;
+        }
+      },
+      bench: {
+        title: 'Old bench',
+        text: () => state.flags.hasLever
+          ? 'The bench looks comfortable enough. Nothing else of use here.'
+          : 'Between the slats you spot a sturdy paperclip and a thin pry tool.',
+        choices: () => state.flags.hasLever
+          ? [ { text: 'Back', go: 'start' } ]
+          : [
+              { text: 'Take the paperclip', act: () => take('paperclip') },
+              { text: 'Take the pry tool', act: () => { take('pry tool'); state.flags.hasLever = true; log('You pocket the pry tool.', 'good'); render(); } },
+              { text: 'Back', go: 'start' }
+            ]
+      },
+      inside: {
+        title: 'The archive',
+        text: () => {
+          const msg = 'Rows of ledgers and diagrams. A single terminal hums. A badge on the wall says “Commit History.”';
+          return state.pro ? msg + ' A hidden panel seems… interactive.' : msg;
+        },
+        choices: () => {
+          const c = [ { text: 'Open the terminal', go: 'terminal' }, { text: 'Back outside', go: 'start' } ];
+          if (state.pro) c.unshift({ text: 'Tap the hidden panel', go: 'easter' });
+          return c;
+        }
+      },
+      terminal: {
+        title: 'Terminal',
+        text: 'On screen: "Push your work to share it with the world." A slot below might accept a key… metaphorically.',
+        choices: [
+          { text: 'Contemplate version control', act: () => { log('You feel a sudden urge to enable GitHub Pages.', 'good'); }, },
+          { text: 'Back', go: 'inside' }
+        ]
+      },
+      easter: {
+        title: 'Secret panel',
+        text: 'You found a hidden toggle. A faint chime plays. You unlocked “Pro Mode” cosmetics.',
+        choices: [
+          { text: 'Back to the archive', go: 'inside' }
+        ]
+      }
+    };
+
+    function has(item){ return state.inventory.includes(item); }
+    function take(item){ if (!has(item)) { state.inventory.push(item); log(`You take the ${item}.`, 'good'); render(); } }
+
+    function tryMovePot(){
+      if (state.pro && !has('pry tool')) { log('The pot will not budge without leverage.', 'bad'); return; }
+      state.flags.potMoved = true; log('With effort, you slide the pot aside.', 'good'); render();
+    }
+    function tryReachKey(){
+      if (state.pro && !has('paperclip')) { log('Your fingers are too big. A small tool might help.', 'bad'); return; }
+      take('rusty key'); log('You fish out a rusty key from the gap.', 'good'); render();
+    }
+
+    function useKey(){
+      if (!has('rusty key')) { log('You pat empty pockets. No key yet.', 'bad'); return; }
+      state.flags.unlocked = true; log('The lock yields with a satisfying click.', 'good'); go('door');
+    }
+
+    // Inject a context action on the door scene
+    const doorChoices = () => state.flags.unlocked
+      ? [ { text:'Enter', go:'inside' }, { text:'Back', go:'start' } ]
+      : [ { text:'Use the rusty key', act:useKey }, { text:'Back', go:'start' } ];
+    SCENES.door.choices = doorChoices;
+
+    function go(id){ state.here = id; state.turns++; render(); }
+
+    function render(){
+      const s = SCENES[state.here];
+      const scene = document.getElementById('scene');
+      const choices = document.getElementById('choices');
+      const inv = document.getElementById('inventory');
+      const progress = document.getElementById('progress');
+      scene.innerHTML = `<h2>${s.title}</h2><p>${(typeof s.text === 'function') ? s.text() : s.text}</p>`;
+
+      // choices
+      const opts = (typeof s.choices === 'function') ? s.choices() : s.choices;
+      choices.innerHTML = '';
+      opts.forEach(opt => {
+        const b = document.createElement('button');
+        b.textContent = opt.text;
+        b.addEventListener('click', () => { opt.go ? go(opt.go) : (opt.act && opt.act()); });
+        choices.appendChild(b);
+      });
+
+      // inventory
+      inv.innerHTML = state.inventory.map(i => `<span class="item">${i}</span>`).join('');
+
+      // progress (rough)
+      const pct = Math.min(100, Math.round((
+        (state.flags.potMoved?20:0) + (has('paperclip')?15:0) + (has('pry tool')?15:0) + (has('rusty key')?30:0) + (state.flags.unlocked?20:0)
+      )));
+      progress.textContent = `${pct}% complete`;
+
+      document.getElementById('klevel').textContent = `Mode: ${state.pro ? 'Pro' : 'Casual'}`;
+      document.getElementById('saveState').textContent = localStorage.getItem('courtyardSave') ? 'Save found' : '';
+    }
+
+    function log(msg, kind){
+      const el = document.getElementById('log');
+      const p = document.createElement('div');
+      p.className = kind || '';
+      p.textContent = msg;
+      el.appendChild(p);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function save(){ localStorage.setItem('courtyardSave', JSON.stringify(state)); log('Game saved.', 'good'); render(); }
+    function load(){ const raw = localStorage.getItem('courtyardSave'); if (!raw) { log('No save found.', 'bad'); return; } Object.assign(state, JSON.parse(raw)); log('Game loaded.', 'good'); render(); }
+    function reset(){ Object.assign(state, { here:'start', flags:{}, inventory:[], pro:false, turns:0 }); log('New run started.', ''); render(); }
+    function togglePro(){ state.pro = !state.pro; log(`Pro Mode ${state.pro? 'enabled' : 'disabled'}.`, 'good'); render(); }
+
+    // UI wires
+    document.getElementById('saveBtn').onclick = save;
+    document.getElementById('loadBtn').onclick = load;
+    document.getElementById('resetBtn').onclick = reset;
+    document.getElementById('proModeBtn').onclick = togglePro;
+    document.getElementById('how').onclick = (e) => {
+      e.preventDefault();
+      alert('Edit scenes in the SCENES object (bottom of file). Add rooms by adding keys with title, text, and choices. Use state.flags and state.inventory for logic. Commit this file to a GitHub repo and enable Pages.');
+    };
+
+    // Secret input: type G, I, T in sequence to auto-unlock (demo Easter egg)
+    (function(){
+      const secret = ['g','i','t'];
+      let i = 0;
+      window.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === secret[i]) { i++; if (i===secret.length){ i=0; state.flags.unlocked=true; log('Secret unlock! (G I T)', 'good'); render(); } }
+        else { i = (e.key.toLowerCase() === secret[0]) ? 1 : 0; }
+      });
+    })();
+
+    // Boot
+    log('You arrive at dusk.');
+    render();
+  </script>
+</body>
+</html>
